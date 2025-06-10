@@ -1,7 +1,7 @@
 # Metz VPS Server
 
 ## Server Setup
-Start by reading /0-VPS_Setup.md
+Start by reading [0-VPS_Setup.md](https://github.com/Thaloz/metz-vps/blob/main/0-VPS_Setup.md)
 
 ## Deploying:
 
