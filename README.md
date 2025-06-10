@@ -52,11 +52,11 @@ docker stack deploy -c 2-infra.yml 2-infra --detach=true
 From this point on, you must deploy all the other stacks through Portainer (2-infra).
 
 The usual steps are the following:
-1 - Go into the stack.yml file and take note of external networks, volumes or secrets that must be created.
-2 - Log into Portainer and create the necessary resources.
-3 - `Portainer > Stack > Deploy` and copy and paste the content of the *.yml you want to deploy (ex. `3-vault.yml`)
-4 - Add the Environment Variables needed.
-5 - Deploy
+1. Go into the stack.yml file and take note of external networks, volumes or secrets that must be created.
+2. Log into Portainer and create the necessary resources.
+3. `Portainer > Stack > Deploy` and copy and paste the content of the *.yml you want to deploy (ex. `3-vault.yml`)
+4. Add the Environment Variables needed.
+5. Deploy
 
 ## Authentik and extra config
 - After all the stacks are deployed, you should setup Authentik and enable the Forward Auth proxies for security and OIDC for SSO OAuth login.
