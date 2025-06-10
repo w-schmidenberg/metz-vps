@@ -14,7 +14,8 @@ adduser metzadmin
 usermod -aG sudo metzadmin
 ```
 
-3. Add SSH keys and log in: * you might need to [create a ssh key](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent) if you don't have one already 
+3. Add SSH keys and log in: 
+*You might need to [create a ssh key](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent) if you don't have one already 
 
 ```sh
 ssh root@<METZ-VPS-IP-ADDR> 'mkdir -p /home/metzadmin/.ssh && echo "<PUBLIC_KEY_CONTENT>" >> /home/metzadmin/.ssh/authorized_keys && chmod 700 /home/metzadmin/.ssh && chmod 600 /home/metzadmin/.ssh/authorized_keys && chown -R metzadmin:metzadmin /home/metzadmin/.ssh'
