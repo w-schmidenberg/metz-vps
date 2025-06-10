@@ -10,7 +10,7 @@ docker swarm init --advertise-addr {IP-ADDR-SERVER}
 
 You will see
 ```sh
-docker swarm join --token SWMTKN-1-1ld6ytebe7q2np3cshbd6g1l5d00j8ybo537blivmbwt2culef-6hwrs4vy35i6qo0sz9r5q2aj4 {IP-ADDR-SERVER}:2377
+docker swarm join --token {YOUR-TOKEN} {IP-ADDR-SERVER}:2377
 ```
 
 ### 1-Proxy
