@@ -1,0 +1,77 @@
+global:
+  checkNewVersion: true
+  sendAnonymousUsage: false
+
+api:
+  dashboard: true
+
+entryPoints:
+  web:
+    address: ":http"
+    http:
+      middlewares:
+        - "global-ratelimit@swarm"
+        - "secHeaders@swarm"
+      # - "traefik-bouncer@swarm"
+      # This section in the Traefik configuration automatically redirects all HTTP traffic to HTTPS.
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+  websecure:
+    address: ":https"
+    http:
+      middlewares:
+        - "global-ratelimit@swarm"
+        - "secHeaders@swarm"
+        - "compresstraefik@swarm"
+      # - "traefik-bouncer@swarm"
+    http2:
+      maxConcurrentStreams: 250
+
+  metrics:
+    address: ":8082"
+
+  ldaps:
+    address: ":636"
+
+providers:
+  swarm:
+    exposedByDefault: false
+    watch: true
+    endpoint: "tcp://socket-proxy:2375"
+    network: "proxy_internet_access"
+
+certificatesResolvers:
+  letsencryptresolver:
+    acme:
+      email: "<email-for-letsencrypt>"
+      storage: "/etc/traefik/acme.json"
+      tlsChallenge: true
+
+metrics:
+  prometheus:
+    addEntryPointsLabels: true
+    addServicesLabels: true
+    entryPoint: "metrics"
+
+log:
+  level: INFO
+  # filePath: "/var/log/traefik/traefik.log"
+  # format: json
+  # maxSize: 10
+  # maxBackups: 10
+  # maxAge: 14
+
+accessLog:
+  filePath: "/var/log/traefik/access.log"
+  format: json
+  bufferingSize: 50
+  fields:
+    defaultMode: keep
+
+experimental:
+  plugins:
+    traefik-bouncer: # Crowdsec Bouncer Plugin
+      moduleName: github.com/maxlerebourg/crowdsec-bouncer-traefik-plugin
+      version: v1.4.2

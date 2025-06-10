@@ -1,0 +1,376 @@
+# 1.Environment Variables
+# AUTHENTIK_LOG_LEVEL: warning, info, debug
+
+# 2. Create Secrets:
+# echo -n "smtp_password" | docker secret create 5-smtp_password -
+# echo -n "db_user" | docker secret create 5-db_user -
+# echo -n "db_password" | docker secret create 5-db_password -
+# echo -n "authentik_secret_key" | docker secret create 5-authentik_secret_key -
+# echo -n "authentik_outpost_ldap_token" | docker secret create 5-authentik_outpost_ldap_token -
+# echo -n "authentik_proxy_outpost_token" | docker secret create 5-authentik_proxy_outpost_token -
+
+# 3. Create Volumes:
+# docker volume create 5-authentik_db_data
+# docker volume create 5-authentik_redis_data
+# docker volume create 5-authentik_media_data
+# docker volume create 5-authentik_templates_data
+# docker volume create 5-authentik_certs_data
+
+x-default-opts: &default-opts
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  # ------------------------------------------------------------
+  # Authentik - https://goauthentik.io/
+  # ------------------------------------------------------------
+  authentik_db:
+    <<: *default-opts
+    image: postgres:16-alpine
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -d $${POSTGRES_DB} -U $$(cat $$POSTGRES_USER_FILE)",
+        ]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 5s
+    volumes:
+      - 5-authentik_db_data:/var/lib/postgresql/data
+    secrets:
+      - 5-db_user
+      - 5-db_password
+    environment:
+      POSTGRES_DB: authentik
+      POSTGRES_USER_FILE: /run/secrets/5-db_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/5-db_password
+    networks:
+      - 5-internal_network
+    deploy:
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          memory: 1G
+          cpus: "0.5"
+        reservations:
+          memory: 512M
+          cpus: "0.25"
+
+  authentik_redis:
+    <<: *default-opts
+    image: redis:alpine
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - 5-authentik_redis_data:/data
+    networks:
+      - 5-internal_network
+    deploy:
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"
+        reservations:
+          memory: 128M
+          cpus: "0.1"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 3s
+
+  authentik:
+    <<: *default-opts
+    image: ghcr.io/goauthentik/server:2025.2.4
+    depends_on:
+      - authentik_db
+      - authentik_redis
+    command: server
+    secrets:
+      - 5-smtp_password
+      - 5-db_user
+      - 5-db_password
+      - 5-authentik_secret_key
+    environment:
+      AUTHENTIK_LOG_LEVEL: ${AUTHENTIK_LOG_LEVEL:-info}
+
+      AUTHENTIK_REDIS__HOST: authentik_redis
+
+      AUTHENTIK_POSTGRESQL__HOST: authentik_db
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+      AUTHENTIK_POSTGRESQL__USER: file:///run/secrets/5-db_user
+      AUTHENTIK_POSTGRESQL__PASSWORD: file:///run/secrets/5-db_password
+
+      # SMTP Host Emails are sent to
+      AUTHENTIK_EMAIL__HOST: smtp.resend.com
+      AUTHENTIK_EMAIL__PORT: 465
+      AUTHENTIK_EMAIL__USE_TLS: "false"
+      AUTHENTIK_EMAIL__USE_SSL: "true"
+      AUTHENTIK_EMAIL__TIMEOUT: 10
+      # Email address authentik will send from, should have a correct @domain.com
+      AUTHENTIK_EMAIL__FROM: "Home VPS Auth <auth-no-reply@m.<metz-domain.com>>"
+      AUTHENTIK_EMAIL__USERNAME: "resend"
+      AUTHENTIK_EMAIL__PASSWORD: file:///run/secrets/5-smtp_password
+
+      AUTHENTIK_SECRET_KEY: file:///run/secrets/5-authentik_secret_key
+      AUTHENTIK_TRUSTED_PROXIES: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "true"
+    volumes:
+      - 5-authentik_media_data:/media
+      - 5-authentik_templates_data:/templates
+      # Mount The logo for the Email Templates
+      # @see https://github.com/goauthentik/authentik/issues/11799
+      # - type: bind
+      #   source: /home/harry/configuration/4-user-directory/email-templates/thaloz_logo.png
+      #   target: /web/icons/icon_left_brand.png # https://github.com/goauthentik/authentik/blob/main/authentik/stages/email/utils.py#L15
+      #   read_only: true
+      # - type: bind
+      #   source: /home/harry/configuration/4-user-directory/email-templates/thaloz_logo.png
+      #   target: /web/dist/assets/icons/icon_left_brand.png
+      #   read_only: true
+    ports:
+      - "9000:9000"
+    networks:
+      - 5-internal_network
+      - proxy_internet_access_network
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.swarm.network=proxy_internet_access_network"
+        - "traefik.http.services.authentik.loadbalancer.server.port=9000"
+        - "traefik.http.services.authentik.loadbalancer.passhostheader=true"
+        # HTTPS router:
+        - "traefik.http.routers.authentik.rule=Host(`auth.<metz-domain.com>`)"
+        - "traefik.http.routers.authentik.entrypoints=websecure"
+        - "traefik.http.routers.authentik.tls=true"
+        - "traefik.http.routers.authentik.tls.certresolver=letsencryptresolver"
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          memory: 1.5G
+          cpus: "1.0"
+        reservations:
+          memory: 512M
+          cpus: "0.5"
+
+  authentik_worker:
+    <<: *default-opts
+    image: ghcr.io/goauthentik/server:2025.2.4
+    depends_on:
+      - authentik_db
+      - authentik_redis
+    command: worker
+    secrets:
+      - 5-db_password
+      - 5-db_user
+      - 5-authentik_secret_key
+      - 5-smtp_password
+    environment:
+      AUTHENTIK_LOG_LEVEL: ${AUTHENTIK_LOG_LEVEL:-info}
+
+      AUTHENTIK_REDIS__HOST: authentik_redis
+
+      AUTHENTIK_POSTGRESQL__HOST: authentik_db
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+      AUTHENTIK_POSTGRESQL__USER: file:///run/secrets/5-db_user
+      AUTHENTIK_POSTGRESQL__PASSWORD: file:///run/secrets/5-db_password
+
+      # SMTP Host Emails are sent to
+      AUTHENTIK_EMAIL__HOST: smtp.resend.com
+      AUTHENTIK_EMAIL__PORT: 465
+      AUTHENTIK_EMAIL__USE_TLS: "false"
+      AUTHENTIK_EMAIL__USE_SSL: "true"
+      AUTHENTIK_EMAIL__TIMEOUT: 10
+      # Email address authentik will send from, should have a correct @domain.com
+      AUTHENTIK_EMAIL__FROM: "Home VPS Auth <auth-no-reply@m.<metz-domain.com>>"
+      AUTHENTIK_EMAIL__USERNAME: "resend"
+      AUTHENTIK_EMAIL__PASSWORD: file:///run/secrets/5-smtp_password
+
+      AUTHENTIK_SECRET_KEY: file:///run/secrets/5-authentik_secret_key
+      AUTHENTIK_TRUSTED_PROXIES: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "true"
+    # `user: root` and the docker socket volume are optional.
+    # See more for the docker socket integration here:
+    # https://goauthentik.io/docs/outposts/integrations/docker
+    # Removing `user: root` also prevents the worker from fixing the permissions
+    # on the mounted folders, so when removing this make sure the folders have the correct UID/GID
+    # (1000:1000 by default)
+    user: root
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - 5-authentik_media_data:/media
+      - 5-authentik_certs_data:/certs
+      - 5-authentik_templates_data:/templates
+      # Mount The logo for the Email Templates
+      # @see https://github.com/goauthentik/authentik/issues/11799
+      # - type: bind
+      #   source: /home/harry/configuration/4-user-directory/email-templates/thaloz_logo.png
+      #   target: /web/icons/icon_left_brand.png # https://github.com/goauthentik/authentik/blob/main/authentik/stages/email/utils.py#L15
+      #   read_only: true
+      # - type: bind
+      #   source: /home/harry/configuration/4-user-directory/email-templates/thaloz_logo.png
+      #   target: /web/dist/assets/icons/icon_left_brand.png
+      #   read_only: true
+    networks:
+      - 5-internal_network
+    healthcheck:
+      test: ["CMD", "ak", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          memory: 768M
+          cpus: "0.5"
+        reservations:
+          memory: 192M
+          cpus: "0.15"
+
+  # ------------------------------------------------------------
+  # Authentik LDAP Outpost - https://docs.goauthentik.io/docs/add-secure-apps/outposts
+  # ------------------------------------------------------------
+  authentik_ldap_outpost:
+    <<: *default-opts
+    image: ghcr.io/goauthentik/ldap:2025.2.4
+    networks:
+      - 5-internal_network
+      - proxy_internet_access_network
+    environment:
+      AUTHENTIK_HOST: "https://auth.<metz-domain.com>"
+      AUTHENTIK_INSECURE: "true"
+      AUTHENTIK_TOKEN: file:///run/secrets/5-authentik_outpost_ldap_token
+      AUTHENTIK_LOG_LEVEL: ${AUTHENTIK_LOG_LEVEL:-info}
+    secrets:
+      - 5-authentik_outpost_ldap_token
+    volumes:
+      # Good practice for time synchronization within the container
+      - /etc/localtime:/etc/localtime:ro
+    deploy:
+      mode: replicated
+      replicas: 1 # Usually 1 replica is sufficient for LDAP
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+        reservations:
+          memory: 128M
+          cpus: "0.1"
+      labels:
+        - "traefik.enable=true"
+        - "traefik.swarm.network=proxy_internet_access_network"
+        # --- TCP Router Definition for LDAPS ---
+        - "traefik.tcp.routers.ldap-outpost-secure.entrypoints=ldaps"
+        - "traefik.tcp.routers.ldap-outpost-secure.rule=HostSNI(`ldap.<metz-domain.com>`)"
+        - "traefik.tcp.routers.ldap-outpost-secure.service=ldap-outpost-svc"
+        - "traefik.tcp.routers.ldap-outpost-secure.tls.certresolver=letsencryptresolver"
+        - "traefik.tcp.routers.ldap-outpost-secure.tls.domains[0].main=ldap.<metz-domain.com>"
+
+        # --- TCP Service Definition (Connecting to internal PLAIN LDAP port) ---
+        - "traefik.tcp.services.ldap-outpost-svc.loadbalancer.server.port=3389" # Point to internal non-TLS port
+
+  # ------------------------------------------------------------
+  # Authentik Traefik Proxy Outpost - https://docs.goauthentik.io/docs/add-secure-apps/outposts
+  # ------------------------------------------------------------
+  authentik_proxy_outpost:
+    <<: *default-opts
+    image: ghcr.io/goauthentik/proxy:2025.2.4
+    networks:
+      - proxy_internet_access_network
+    secrets:
+      - 5-authentik_proxy_outpost_token
+    environment:
+      AUTHENTIK_HOST: https://auth.<metz-domain.com>
+      AUTHENTIK_INSECURE: "true"
+      AUTHENTIK_TOKEN: file:///run/secrets/5-authentik_proxy_outpost_token
+      AUTHENTIK_LOG_LEVEL: ${AUTHENTIK_LOG_LEVEL:-info}
+      # AUTHENTIK_HOST_BROWSER: Optional, if external URL differs from internal
+    deploy:
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+        reservations:
+          memory: 128M
+          cpus: "0.1"
+      labels:
+        # Define the forward auth middleware
+        - "traefik.enable=true" # Expose the proxy itself IF needed for domain level auth setup, often not required
+        - "traefik.swarm.network=proxy_internet_access_network"
+        - "traefik.http.middlewares.authentik-forwardauth.forwardauth.address=http://authentik_proxy_outpost:9000/outpost.goauthentik.io/auth/traefik"
+        - "traefik.http.middlewares.authentik-forwardauth.forwardauth.trustForwardHeader=true"
+        - "traefik.http.middlewares.authentik-forwardauth.forwardauth.authResponseHeaders=X-authentik-username,X-authentik-groups,X-authentik-entitlements,X-authentik-email,X-authentik-name,X-authentik-uid,X-authentik-jwt,X-authentik-meta-jwks,X-authentik-meta-outpost,X-authentik-meta-provider,X-authentik-meta-app,X-authentik-meta-version"
+        # Optional: Route for the outpost itself if needed for domain level logout etc.
+        - "traefik.http.routers.authentik-proxy-outpost.rule=Host(`traefik.<metz-domain.com>`) && PathPrefix(`/outpost.goauthentik.io/`)"
+        - "traefik.http.routers.authentik-proxy-outpost.service=authentik-proxy-svc"
+        - "traefik.http.routers.authentik-proxy-outpost.entrypoints=websecure"
+        - "traefik.http.routers.authentik-proxy-outpost.tls=true"
+        - "traefik.http.routers.authentik-proxy-outpost.tls.certresolver=letsencryptresolver"
+        - "traefik.http.routers.authentik-proxy-outpost.priority=200" # Higher priority to ensure it takes precedence for its path
+        - "traefik.http.services.authentik-proxy-svc.loadbalancer.server.port=9000" # Authentik Proxy internal port
+
+volumes:
+  5-authentik_db_data:
+    name: 5-authentik_db_data
+    external: true
+  5-authentik_redis_data:
+    name: 5-authentik_redis_data
+    external: true
+  5-authentik_media_data:
+    name: 5-authentik_media_data
+    external: true
+  5-authentik_templates_data:
+    name: 5-authentik_templates_data
+    external: true
+  5-authentik_certs_data:
+    name: 5-authentik_certs_data
+    external: true
+
+networks:
+  proxy_internet_access_network:
+    driver: overlay
+    external: true
+  5-internal_network:
+    driver: overlay
+    external: false
+
+secrets:
+  5-smtp_password:
+    external: true
+  5-db_user:
+    external: true
+  5-db_password:
+    external: true
+  5-authentik_secret_key:
+    external: true
+  5-authentik_outpost_ldap_token:
+    external: true
+  5-authentik_proxy_outpost_token:
+    external: true

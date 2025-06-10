@@ -1,0 +1,82 @@
+x-default-opts: &default-opts
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  # ------------------------------------------------------------
+  # vaultwarden: https://vaultwarden.org/
+  # ------------------------------------------------------------
+  vaultwarden:
+    <<: *default-opts
+    image: vaultwarden/server:latest
+    secrets:
+      - 3-vault_smtp_password
+    environment:
+      DOMAIN: https://vault.<metz-domain.com>
+      SMTP_AUTH_MECHANISM: Login
+      # Using Resend API instead of SMTP
+      SMTP_HOST: smtp.resend.com
+      SMTP_FROM: vault@m.<metz-domain.com>
+      SMTP_PORT: 465
+      SMTP_SECURITY: force_tls
+      SMTP_USERNAME: resend
+      SMTP_PASSWORD_FILE: /run/secrets/3-vault_smtp_password
+      SMTP_DEBUG: ${SMTP_DEBUG-false}
+      WEBSOCKET_ENABLED: "true"
+      TZ: "America/Montevideo"
+      LOG_FILE: "/logs/vaultwarden.log"
+      # Enable admin page: @https://github.com/dani-garcia/vaultwarden/wiki/Enabling-admin-page @https://vault.<metz-domain.com>/admin
+      ADMIN_TOKEN: "$$argon2id$$v=19$$m=19456,t=2,p=1$$dyKxHiUbEOiAOU4V5WQGXORrWC42g4o0fLvaJyLxNWo$$bHI4eotVsUq73X3mA2mh6Dxkx/bhczeFU9cr9jK9QvE"
+    volumes:
+      - 3-vaultwarden_data:/data
+      - 3-vaultwarden_logs:/logs
+    networks:
+      - proxy_internet_access_network
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.swarm.network=proxy_internet_access_network"
+        - "traefik.http.services.vaultwarden.loadbalancer.server.port=80"
+        - "traefik.http.services.vaultwarden.loadbalancer.passhostheader=true"
+
+        # Main router for most Vaultwarden access
+        - "traefik.http.routers.vaultwarden.rule=Host(`vault.<metz-domain.com>`) && !PathPrefix(`/admin`)"
+        - "traefik.http.routers.vaultwarden.entrypoints=websecure"
+        - "traefik.http.routers.vaultwarden.tls=true"
+        - "traefik.http.routers.vaultwarden.tls.certresolver=letsencryptresolver"
+
+        # Separate router with authentication for admin page
+        - "traefik.http.routers.vaultwarden-admin.rule=Host(`vault.<metz-domain.com>`) && PathPrefix(`/admin`)"
+        - "traefik.http.routers.vaultwarden-admin.entrypoints=websecure"
+        - "traefik.http.routers.vaultwarden-admin.service=vaultwarden"
+        - "traefik.http.routers.vaultwarden-admin.tls=true"
+        - "traefik.http.routers.vaultwarden-admin.tls.certresolver=letsencryptresolver"
+        - "traefik.http.routers.vaultwarden-admin.middlewares=authentik-forwardauth@swarm"
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+        reservations:
+          memory: 384M
+          cpus: "0.3"
+
+volumes:
+  3-vaultwarden_data:
+    name: 3-vaultwarden_data
+    external: true
+  3-vaultwarden_logs:
+    name: 3-vaultwarden_logs
+    external: true
+
+networks:
+  proxy_internet_access_network:
+    external: true
+
+secrets:
+  3-vault_smtp_password:
+    external: true

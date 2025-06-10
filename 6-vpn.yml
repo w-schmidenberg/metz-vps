@@ -1,0 +1,53 @@
+# Environment Variables
+# TWINGATE_ACCESS_TOKEN_1
+# TWINGATE_REFRESH_TOKEN_1
+# TWINGATE_ACCESS_TOKEN_2
+# TWINGATE_REFRESH_TOKEN_2
+
+x-default-opts: &default-opts
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  # name of the connector #1
+  twingate-connector-1:
+    <<: *default-opts
+    image: twingate/connector:1
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    environment:
+      - TWINGATE_NETWORK=paf
+      - TWINGATE_ACCESS_TOKEN=${TWINGATE_ACCESS_TOKEN_1}
+      - TWINGATE_REFRESH_TOKEN=${TWINGATE_REFRESH_TOKEN_1}
+      - TWINGATE_LABEL_HOSTNAME={{.Node.Hostname}}
+      - TWINGATE_LABEL_DEPLOYED_BY=docker
+    sysctls:
+      net.ipv4.ping_group_range: "0 2147483647"
+    restart: unless-stopped
+
+  # name of the connector #2
+  twingate-connector-2:
+    <<: *default-opts
+    image: twingate/connector:1
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    environment:
+      - TWINGATE_NETWORK=paf
+      - TWINGATE_ACCESS_TOKEN=${TWINGATE_ACCESS_TOKEN_2}
+      - TWINGATE_REFRESH_TOKEN=${TWINGATE_REFRESH_TOKEN_2}
+      - TWINGATE_LABEL_HOSTNAME={{.Node.Hostname}}
+      - TWINGATE_LABEL_DEPLOYED_BY=docker
+    sysctls:
+      net.ipv4.ping_group_range: "0 2147483647"
+    restart: unless-stopped

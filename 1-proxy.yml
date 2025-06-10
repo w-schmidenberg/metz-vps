@@ -1,0 +1,231 @@
+x-default-opts: &default-opts
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  # ------------------------------------------------------------
+  # socket-proxy: https://github.com/tecnativa/docker-socket-proxy
+  #
+  # Why is it needed?
+  # If you mount the Docker Socket ( /var/run/docker.sock) into the Traefik container and
+  # gets access into the container, they can gain full access to your host machine.
+  # ------------------------------------------------------------
+  socket-proxy:
+    <<: *default-opts
+    image: tecnativa/docker-socket-proxy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      # Grant access to specific API sections (1 = grant access, 0 = revoke access)
+      CONTAINERS: 1
+      EVENTS: 1
+      PING: 1
+      VERSION: 1
+      SERVICES: 1
+      TASKS: 1
+      NETWORKS: 1
+      NODES: 1
+      SWARM: 1
+
+      # Selective write permissions
+      POST: 0 # Disable all POST operations by default !VERY IMPORTANT
+      SERVICES_POST: 1 # Allow creation/updates to services
+      NETWORKS_POST: 1 # Allow creation/updates to networks
+
+      # Required for Let's Encrypt cert management
+      CONFIGS: 1 # Access to configs for Swarm
+      CONFIGS_POST: 1 # Allow creating/updating configs
+      SECRETS: 1 # Access to secrets for Swarm
+
+      # HAProxy settings
+      LOG_LEVEL: "info" # Logging level
+
+      # Additional HAProxy settings
+      STATS_PORT: 1936
+      STATS_ADMIN: "true"
+    networks:
+      proxy_socket_access_network:
+        aliases:
+          - socket-proxy
+    configs:
+      - source: socketproxy_haproxy_cfg
+        target: /usr/local/etc/haproxy/haproxy.cfg.template
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -q --spider http://localhost:2375/_ping || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    deploy:
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.3"
+
+  # ------------------------------------------------------------
+  # traefik: https://doc.traefik.io/
+  # ------------------------------------------------------------
+  traefik:
+    <<: *default-opts
+    image: traefik:latest
+    networks:
+      proxy_internet_access_network:
+        aliases:
+          - traefik.<metz-domain.com>
+          - traefik
+      proxy_socket_access_network:
+      security_network:
+    ports:
+      # --- Ports Directly using Host Mode ---
+      # Bypasses routing mesh, binds directly to the node's IP where the container runs.
+      # Ensure placement constraints target the correct node(s) with public IP & open firewall.
+      - published: 80 # HTTP
+        target: 80
+        protocol: tcp
+        mode: host
+      - published: 443 # HTTPS
+        target: 443
+        protocol: tcp
+        mode: host
+      - published: 636 # LDAPS (Implicit TLS)
+        target: 636
+        protocol: tcp
+        mode: host
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - 1-traefik_certs:/etc/certs
+      - 1-traefik_acme_data:/etc/traefik
+      - 1-traefik_log_data:/var/log/traefik
+    configs: # Mount static config file
+      - source: traefik_static_config
+        target: /etc/traefik/traefik.yml
+    # secrets:
+    #   - crowdsec_bouncer_key_traefik
+    # Override command to ensure log directory/files exist and have correct permissions
+    # command: >
+    #   sh -c '
+    #     mkdir -p /var/log/traefik && \
+    #     touch /var/log/traefik/traefik.log && \
+    #     touch /var/log/traefik/access.log && \
+    #     chown -R nobody:nogroup /var/log/traefik && \
+    #     exec /entrypoint.sh traefik --configfile=/etc/traefik/traefik.yml
+    #   '
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.swarm.network=proxy_internet_access_network"
+
+        # Default service for traefik itself
+        - "traefik.http.services.traefik.loadbalancer.server.port=8080"
+
+        # Dashboard
+        - "traefik.http.routers.dashboard.rule=Host(`traefik.<metz-domain.com>`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
+        - "traefik.http.routers.dashboard.service=api@internal"
+        - "traefik.http.routers.dashboard.entrypoints=websecure"
+        - "traefik.http.routers.dashboard.tls=true"
+        - "traefik.http.routers.dashboard.tls.certresolver=letsencryptresolver"
+        - "traefik.http.routers.dashboard.priority=100" # Lower priority than authentik-proxy-outpost
+        # Apply specific middlewares needed for the dashboard
+        - "traefik.http.routers.dashboard.middlewares=authentik-forwardauth"
+
+        # --- Middleware Definitions (accessible via @swarm) ---
+
+        # Global Rate Limiting Middleware Definition
+        - "traefik.http.middlewares.global-ratelimit.ratelimit.average=100" # Allow 100 requests/second on average
+        - "traefik.http.middlewares.global-ratelimit.ratelimit.burst=50" # Allow bursts up to 50 requests
+
+        # CrowdSec Bouncer Plugin Middleware Configuration
+        # - "traefik.http.middlewares.traefik-bouncer.plugin.traefik-bouncer.Enabled=false"
+        # - "traefik.http.middlewares.traefik-bouncer.plugin.traefik-bouncer.LogLevel=INFO"
+        # - "traefik.http.middlewares.traefik-bouncer.plugin.traefik-bouncer.CrowdsecLapiHost=crowdsec-lapi:8080"
+        # - "traefik.http.middlewares.traefik-bouncer.plugin.traefik-bouncer.CrowdsecLapiKeyFile=/run/secrets/crowdsec_bouncer_key_traefik"
+        # - "traefik.http.middlewares.traefik-bouncer.plugin.traefik-bouncer.CrowdsecLapiScheme=http"
+        # - "traefik.http.middlewares.traefik-bouncer.plugin.traefik-bouncer.CrowdsecMode=stream"
+        # Tell the bouncer which proxies are allowed to set the forwarded header
+        # - "traefik.http.middlewares.traefik-bouncer.plugin.traefik-bouncer.ForwardedHeadersTrustedIPs=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+
+        # Authentik ForwardAuth Middleware
+        - "traefik.http.middlewares.authentik-forwardauth.forwardauth.address=http://authentik_proxy_outpost:9000/outpost.goauthentik.io/auth/traefik"
+        - "traefik.http.middlewares.authentik-forwardauth.forwardauth.trustForwardHeader=true"
+        - "traefik.http.middlewares.authentik-forwardauth.forwardauth.authResponseHeaders=X-authentik-username,X-authentik-groups,X-authentik-entitlements,X-authentik-email,X-authentik-name,X-authentik-uid,X-authentik-jwt,X-authentik-meta-jwks,X-authentik-meta-outpost,X-authentik-meta-provider,X-authentik-meta-app,X-authentik-meta-version"
+
+        # Secure Headers middleware (global middleware)
+        - "traefik.http.middlewares.secHeaders.headers.browserXssFilter=true"
+        - "traefik.http.middlewares.secHeaders.headers.contentTypeNosniff=true"
+        - "traefik.http.middlewares.secHeaders.headers.forceSTSHeader=true"
+        - "traefik.http.middlewares.secHeaders.headers.stsSeconds=63072000" # 63072000 seconds = 2 years
+        - "traefik.http.middlewares.secHeaders.headers.stsIncludeSubdomains=true"
+        - "traefik.http.middlewares.secHeaders.headers.stsPreload=true"
+        - "traefik.http.middlewares.secHeaders.headers.customFrameOptionsValue=SAMEORIGIN"
+        - "traefik.http.middlewares.secHeaders.headers.contentSecurityPolicy=frame-ancestors 'self'"
+
+        # Global compression middleware definition
+        - "traefik.http.middlewares.compresstraefik.compress=true"
+        - "traefik.http.middlewares.compresstraefik.compress.excludedContentTypes=image/png,image/jpeg,image/gif,video/mp4"
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          memory: 2GB
+          cpus: "1.5"
+
+  # ------------------------------------------------------------
+  # traefik-certs-dumper: https://github.com/kereis/traefik-certs-dumper
+  # ------------------------------------------------------------
+  traefik-certs-dumper:
+    <<: *default-opts
+    image: ghcr.io/kereis/traefik-certs-dumper:latest
+    depends_on:
+      - traefik
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - 1-traefik_acme_data:/traefik:ro
+      - 1-traefik_dumped_certs:/output
+    environment:
+      - VERSION=v3
+    deploy:
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - node.role == manager
+
+configs:
+  socketproxy_haproxy_cfg:
+    file: ./config/1-proxy/socket-proxy/haproxy.cfg.template
+  traefik_static_config:
+    file: ./config/1-proxy/traefik/traefik_config.yml
+
+networks:
+  proxy_socket_access_network:
+    external: true
+  proxy_internet_access_network:
+    external: true
+  security_network:
+    external: true
+
+volumes:
+  1-traefik_certs:
+    name: 1-traefik_certs
+    external: true
+  1-traefik_dumped_certs:
+    name: 1-traefik_dumped_certs
+    external: true
+  1-traefik_acme_data:
+    name: 1-traefik_acme_data
+    external: true
+  1-traefik_log_data:
+    name: 1-traefik_log_data
+    external: true

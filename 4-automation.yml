@@ -1,0 +1,68 @@
+x-default-opts: &default-opts
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  # ------------------------------------------------------------
+  # n8n: https://n8n.io/
+  # ------------------------------------------------------------
+  n8n:
+    <<: *default-opts
+    image: docker.n8n.io/n8nio/n8n:latest
+    secrets:
+      - 4-n8n_smtp_password
+    environment:
+      - N8N_RUNNERS_ENABLED=true
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      - N8N_EMAIL_MODE=smtp
+      - N8N_SMTP_HOST=smtp.resend.com
+      - N8N_SMTP_PORT=465
+      - N8N_SMTP_SENDER=n8n@m.<metz-domain.com>
+      - N8N_SMTP_SSL=true
+      # https://docs.n8n.io/hosting/configuration/environment-variables/user-management-smtp-2fa/
+      - N8N_SMTP_USER=resend
+      - N8N_SMTP_PASSWORD_FILE=/run/secrets/4-n8n_smtp_password
+      - N8N_MFA_ENABLED=true
+      - WEBHOOK_URL=https://n8n.<metz-domain.com>/
+      - GENERIC_TIMEZONE=America/Montevideo
+    volumes:
+      - 4-n8n_data:/home/node/.n8n
+    networks:
+      - proxy_internet_access_network
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.swarm.network=proxy_internet_access_network"
+        - "traefik.http.services.n8n.loadbalancer.server.port=5678"
+        - "traefik.http.services.n8n.loadbalancer.passhostheader=true"
+        # HTTPS router:
+        - "traefik.http.routers.n8n.rule=Host(`n8n.<metz-domain.com>`)"
+        - "traefik.http.routers.n8n.entrypoints=websecure"
+        - "traefik.http.routers.n8n.tls=true"
+        - "traefik.http.routers.n8n.tls.certresolver=letsencryptresolver"
+        # Forward auth middleware for extra security
+        - "traefik.http.routers.n8n.middlewares=authentik-forwardauth@swarm"
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          memory: 1.5G
+          cpus: "1.0"
+
+volumes:
+  4-n8n_data:
+    name: 4-n8n_data
+    external: true
+
+networks:
+  proxy_internet_access_network:
+    external: true
+
+secrets:
+  4-n8n_smtp_password:
+    external: true
