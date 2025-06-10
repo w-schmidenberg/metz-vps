@@ -70,4 +70,5 @@ sudo ufw allow https
 sudo ufw show added
 ```
 
+# THIS WILL ENABLE THE FIREWALL, MAKE SURE YOUR SSH KEY WORKS OR YOU WILL GET LOCKED OUT OF THE VPS!
 `sudo ufw enable`
