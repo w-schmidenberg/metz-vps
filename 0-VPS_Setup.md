@@ -23,7 +23,7 @@ ssh root@<METZ-VPS-IP-ADDR> 'mkdir -p /home/metzadmin/.ssh && echo "<PUBLIC_KEY_
 
 - This is optional, it will install [tmux](https://github.com/tmux/tmux/wiki) for convenience.
 ```sh
-sudo apt get tmux
+sudo apt install tmux
 ```
 
 ```sh
