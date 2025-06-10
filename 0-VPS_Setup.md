@@ -45,7 +45,7 @@ su - $USER
 5. Harden SSH:
 
 ```sh
-sudo vim /etc/ssh/sshd_config
+sudo nano /etc/ssh/sshd_config
 ```
 
 Make this changes
