@@ -1,3 +1,7 @@
+# VPS Setup and Hardening
+
+Login via SSH to your VPS server and do the following steps:
+
 1. Add user
 
 ```sh
@@ -16,6 +20,7 @@ usermod -aG sudo metzadmin
 ssh root@<METZ-VPS-IP-ADDR> 'mkdir -p /home/metzadmin/.ssh && echo "<PUBLIC_KEY_CONTENT>" >> /home/metzadmin/.ssh/authorized_keys && chmod 700 /home/metzadmin/.ssh && chmod 600 /home/metzadmin/.ssh/authorized_keys && chown -R metzadmin:metzadmin /home/metzadmin/.ssh'
 ```
 
+- This is optional, it will install [tmux](https://github.com/tmux/tmux/wiki) for convenience.
 ```sh
 sudo apt get tmux
 ```
