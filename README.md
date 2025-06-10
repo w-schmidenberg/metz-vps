@@ -1,5 +1,8 @@
 # Metz VPS Server
 
+## Server Setup
+Start by reading /0-VPS_Setup.md
+
 ## Deploying:
 
 1. Init Docker Swarm
