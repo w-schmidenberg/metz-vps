@@ -1,4 +1,4 @@
-# Home Server
+# Metz VPS Server
 
 ## Deploying:
 
