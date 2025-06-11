@@ -18,7 +18,14 @@ docker swarm join --token {YOUR-TOKEN} {IP-ADDR-SERVER}:2377
 
 ### 1-Proxy
 
-1.Create networks
+1.Install HAProxy
+
+```sh
+sudo apt install haproxy
+visit https://haproxy.debian.net/ to get the latest LTS version for your OS
+```
+
+2.Create networks
 
 ```sh
 docker network create --driver overlay --attachable proxy_socket_access_network
@@ -26,7 +33,7 @@ docker network create --driver overlay --attachable proxy_internet_access_networ
 docker network create --driver overlay --attachable security_network
 ```
 
-2.Create volumes
+3.Create volumes
 
 ```sh
 docker volume create 1-traefik_certs
@@ -35,7 +42,7 @@ docker volume create 1-traefik_acme_data
 docker volume create 1-traefik_log_data
 ```
 
-3. Deploy
+4. Deploy
 
 ```sh
 docker stack deploy -c 1-proxy.yml 1-proxy --detach=true
